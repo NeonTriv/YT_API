@@ -4,6 +4,7 @@ import requests
 import json
 import os
 from dotenv import load_dotenv
+from keep_alive import keep_alive
 
 # --- TẢI BIẾN MÔI TRƯỜNG TỪ FILE .env ---
 load_dotenv()
@@ -147,4 +148,5 @@ if __name__ == "__main__":
     if TOKEN is None:
         print("LỖI: Chưa tìm thấy TOKEN! Hãy kiểm tra lại file .env")
     else:
+        keep_alive() # Bật web server chống ngủ đông
         bot.run(TOKEN)
