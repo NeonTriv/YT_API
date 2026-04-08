@@ -122,7 +122,7 @@ async def check_channel_stats():
         print(f"Đã xảy ra lỗi khi gọi API: {e}")
 
 # --- 5. LỆNH KIỂM TRA THỦ CÔNG ---
-@bot.command(name="stats")
+@bot.command(name="ytstats")
 async def check_stats_manual(ctx):
     stats = load_stats()
     subs = stats.get('subscriberCount', 0)
@@ -132,8 +132,8 @@ async def check_stats_manual(ctx):
     view_pts = calculate_points(views)
     
     msg = (f"📊 **BÁO CÁO TÌNH HÌNH KÊNH:**\n"
-           f"👥 Subs: **{subs:,}** ➡️ Điểm: **{sub_pts:,} pts**\n"
-           f"👁️ Views: **{views:,}** ➡️ Điểm: **{view_pts:,} pts**\n"
+           f"👥 Subs: **{subs:,}** \n"
+           f"👁️ Views: **{views:,}** \n"
            f"🎬 Số video: **{stats.get('videoCount', 0)}**")
     await ctx.send(msg)
 
