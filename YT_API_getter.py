@@ -111,7 +111,7 @@ def save_stats(stats):
         print(f"Lỗi lưu JSONBin: {e}")
 
 # --- 4. LOGIC KIỂM TRA YOUTUBE ---
-@tasks.loop(minutes=30)
+@tasks.loop(minutes=15)
 async def check_channel_stats():
     print("Đang kiểm tra thông số kênh YouTube...")
     url = f"https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet&id={CHANNEL_ID}&key={YT_API_KEY}"
@@ -134,9 +134,14 @@ async def check_channel_stats():
             old_views = saved_stats.get("viewCount", 0)
             
             channel = bot.get_channel(DISCORD_CHANNEL_ID)
+            crossed_sub_milestones = get_crossed_subscriber_milestones(old_subs, current_subs)
+            crossed_view_milestones = get_crossed_view_milestones(old_views, current_views)
+
+            if (crossed_sub_milestones or crossed_view_milestones) and not channel:
+                print("Không tìm thấy channel Discord để gửi chúc mừng. Chưa lưu stats để tránh mất mốc.")
+                return
 
             # KIỂM TRA MỐC SUBSCRIBER
-            crossed_sub_milestones = get_crossed_subscriber_milestones(old_subs, current_subs)
             for milestone in crossed_sub_milestones:
                 if channel:
                     await channel.send(
@@ -144,7 +149,6 @@ async def check_channel_stats():
                     )
                     
             # KIỂM TRA MỐC LƯỢT XEM
-            crossed_view_milestones = get_crossed_view_milestones(old_views, current_views)
             for milestone in crossed_view_milestones:
                 if channel:
                     await channel.send(
