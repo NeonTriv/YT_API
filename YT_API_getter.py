@@ -21,47 +21,94 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 DATA_FILE = "channel_stats.json"
+JSONBIN_ID = os.getenv('JSONBIN_ID')
+JSONBIN_KEY = os.getenv('JSONBIN_KEY')
+JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_ID}"
 
-MILESTONES = {
-    "subscribers": [100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000],
-    "views": [1000, 5000, 10000, 50000, 100000, 500000, 1000000, 5000000, 10000000]
-}
+# --- 3. QUY TẮC MỐC SUBSCRIBER ---
+def generate_subscriber_milestone_rules(max_power=10):
+    rules = [(1, 100, 1)]
 
-# --- 3. THUẬT TOÁN TÍNH ĐIỂM ---
-def calculate_points(amount):
-    if amount <= 0: return 0
-    points = 0
-    previous_limit = 0
-    base_limits = [1, 5, 10]
-    base_multipliers = [1, 2, 5]
-    power = 2 
-    
-    while amount > previous_limit:
-        for i in range(len(base_limits)):
-            current_limit = base_limits[i] * (10 ** power)
-            current_multiplier = base_multipliers[i] * (10 ** (power - 2))
-            
-            if current_limit <= previous_limit:
-                continue
+    # Từ 100 trở đi, các dải giữ nguyên pattern và chỉ scale thêm số 0.
+    for power in range(2, max_power + 1):
+        base = 10 ** power
+        rules.append((base, 5 * base, 2 * (10 ** (power - 2))))
+        rules.append((5 * base, 10 * base, 5 * (10 ** (power - 2))))
 
-            if amount > previous_limit:
-                chunk = min(amount, current_limit) - previous_limit
-                points += chunk * current_multiplier
-                previous_limit = current_limit
-            else:
-                break
-        power += 1 
-    return int(points)
+    last_base = 10 ** max_power
+    rules.append((last_base, float("inf"), 2 * (10 ** (max_power - 2))))
+    return rules
+
+
+SUBSCRIBER_MILESTONE_RULES = generate_subscriber_milestone_rules()
+
+
+def generate_view_milestones(max_power=10):
+    milestones = []
+    for power in range(3, max_power + 1):
+        base = 10 ** power
+        milestones.extend([base, 5 * base])
+    return milestones
+
+
+VIEW_MILESTONES = generate_view_milestones()
+
+
+def get_crossed_subscriber_milestones(old_subs, current_subs):
+    if current_subs <= old_subs:
+        return []
+
+    crossed = []
+    start_global = old_subs + 1
+    end_global = current_subs
+
+    for band_start, band_end, step in SUBSCRIBER_MILESTONE_RULES:
+        band_effective_end = end_global if band_end == float("inf") else min(end_global, band_end - 1)
+        band_effective_start = max(start_global, band_start)
+
+        if band_effective_start > band_effective_end:
+            continue
+
+        remainder = band_effective_start % step
+        first_milestone = band_effective_start if remainder == 0 else band_effective_start + (step - remainder)
+
+        if first_milestone <= band_effective_end:
+            crossed.extend(range(first_milestone, band_effective_end + 1, step))
+
+    return crossed
+
+
+def get_crossed_view_milestones(old_views, current_views):
+    return [m for m in VIEW_MILESTONES if old_views < m <= current_views]
 
 def load_stats():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {"subscriberCount": 0, "viewCount": 0, "videoCount": 0}
+    """Tải dữ liệu từ đám mây JSONBin"""
+    if not JSONBIN_ID or not JSONBIN_KEY:
+        return {"subscriberCount": 0, "viewCount": 0, "videoCount": 0}
+
+    headers = {'X-Master-Key': JSONBIN_KEY}
+    try:
+        req = requests.get(JSONBIN_URL, headers=headers)
+        data = req.json()
+        return data.get('record', {"subscriberCount": 0, "viewCount": 0, "videoCount": 0})
+    except Exception as e:
+        print(f"Lỗi đọc JSONBin: {e}")
+        return {"subscriberCount": 0, "viewCount": 0, "videoCount": 0}
+
 
 def save_stats(stats):
-    with open(DATA_FILE, "w") as f:
-        json.dump(stats, f)
+    """Lưu dữ liệu mới lên JSONBin"""
+    if not JSONBIN_ID or not JSONBIN_KEY:
+        return
+
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Master-Key': JSONBIN_KEY
+    }
+    try:
+        requests.put(JSONBIN_URL, json=stats, headers=headers)
+    except Exception as e:
+        print(f"Lỗi lưu JSONBin: {e}")
 
 # --- 4. LOGIC KIỂM TRA YOUTUBE ---
 @tasks.loop(minutes=30)
@@ -87,36 +134,29 @@ async def check_channel_stats():
             old_views = saved_stats.get("viewCount", 0)
             
             channel = bot.get_channel(DISCORD_CHANNEL_ID)
-            
-            sub_points = calculate_points(current_subs)
-            view_points = calculate_points(current_views)
-            
+
             # KIỂM TRA MỐC SUBSCRIBER
-            for milestone in sorted(MILESTONES["subscribers"], reverse=True):
-                if old_subs < milestone and current_subs >= milestone:
-                    if channel:
-                        await channel.send(
-                            f"🎉 **ĐỘT PHÁ!** Kênh **{channel_name}** vừa đạt mốc **{milestone:,} Subs!**\n"
-                            f"✨ Tích lũy được tổng cộng: **{sub_points:,} Điểm Subs** 📈"
-                        )
-                    break 
+            crossed_sub_milestones = get_crossed_subscriber_milestones(old_subs, current_subs)
+            for milestone in crossed_sub_milestones:
+                if channel:
+                    await channel.send(
+                        f"🎉 **CHÚC MỪNG!** Kênh **{channel_name}** vừa đạt mốc **{milestone:,} Subs!**"
+                    )
                     
             # KIỂM TRA MỐC LƯỢT XEM
-            for milestone in sorted(MILESTONES["views"], reverse=True):
-                if old_views < milestone and current_views >= milestone:
-                    if channel:
-                        await channel.send(
-                            f"🔥 **CHÁY QUÁ!** Kênh **{channel_name}** vừa cán mốc **{milestone:,} Views!**\n"
-                            f"🌟 Tích lũy được tổng cộng: **{view_points:,} Điểm Views** 🚀"
-                        )
-                    break
+            crossed_view_milestones = get_crossed_view_milestones(old_views, current_views)
+            for milestone in crossed_view_milestones:
+                if channel:
+                    await channel.send(
+                        f"🔥 **CHÁY QUÁ!** Kênh **{channel_name}** vừa cán mốc **{milestone:,} Views!**"
+                    )
             
             save_stats({
                 "subscriberCount": current_subs,
                 "viewCount": current_views,
                 "videoCount": int(stats.get("videoCount", 0))
             })
-            print(f"Cập nhật: {current_subs} subs ({sub_points} pts) | {current_views} views ({view_points} pts)")
+            print(f"Cập nhật: {current_subs} subs | {current_views} views")
             
     except Exception as e:
         print(f"Đã xảy ra lỗi khi gọi API: {e}")
@@ -127,9 +167,6 @@ async def check_stats_manual(ctx):
     stats = load_stats()
     subs = stats.get('subscriberCount', 0)
     views = stats.get('viewCount', 0)
-    
-    sub_pts = calculate_points(subs)
-    view_pts = calculate_points(views)
     
     msg = (f"📊 **BÁO CÁO TÌNH HÌNH KÊNH:**\n"
            f"👥 Subs: **{subs:,}** \n"
