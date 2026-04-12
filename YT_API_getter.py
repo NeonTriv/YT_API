@@ -110,65 +110,82 @@ def save_stats(stats):
     except Exception as e:
         print(f"Lỗi lưu JSONBin: {e}")
 
-# --- 4. LOGIC KIỂM TRA YOUTUBE ---
-@tasks.loop(minutes=15)
-async def check_channel_stats():
+
+async def sync_channel_stats():
     print("Đang kiểm tra thông số kênh YouTube...")
     url = f"https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet&id={CHANNEL_ID}&key={YT_API_KEY}"
-    
+
     try:
         response = requests.get(url)
         data = response.json()
-        
-        if "items" in data and len(data["items"]) > 0:
-            channel_data = data["items"][0]
-            stats = channel_data["statistics"]
-            snippet = channel_data["snippet"]
-            
-            current_subs = int(stats.get("subscriberCount", 0))
-            current_views = int(stats.get("viewCount", 0))
-            channel_name = snippet.get("title", "Kênh của bạn")
-            
-            saved_stats = load_stats()
-            old_subs = saved_stats.get("subscriberCount", 0)
-            old_views = saved_stats.get("viewCount", 0)
-            
-            channel = bot.get_channel(DISCORD_CHANNEL_ID)
-            crossed_sub_milestones = get_crossed_subscriber_milestones(old_subs, current_subs)
-            crossed_view_milestones = get_crossed_view_milestones(old_views, current_views)
 
-            if (crossed_sub_milestones or crossed_view_milestones) and not channel:
-                print("Không tìm thấy channel Discord để gửi chúc mừng. Chưa lưu stats để tránh mất mốc.")
-                return
+        if "items" not in data or len(data["items"]) == 0:
+            return None
 
-            # KIỂM TRA MỐC SUBSCRIBER
-            for milestone in crossed_sub_milestones:
-                if channel:
-                    await channel.send(
-                        f"🎉 **CHÚC MỪNG!** Kênh **{channel_name}** vừa đạt mốc **{milestone:,} Subs!**"
-                    )
-                    
-            # KIỂM TRA MỐC LƯỢT XEM
-            for milestone in crossed_view_milestones:
-                if channel:
-                    await channel.send(
-                        f"🔥 **CHÁY QUÁ!** Kênh **{channel_name}** vừa cán mốc **{milestone:,} Views!**"
-                    )
-            
-            save_stats({
+        channel_data = data["items"][0]
+        stats = channel_data["statistics"]
+        snippet = channel_data["snippet"]
+
+        current_subs = int(stats.get("subscriberCount", 0))
+        current_views = int(stats.get("viewCount", 0))
+        channel_name = snippet.get("title", "Kênh của bạn")
+
+        saved_stats = load_stats()
+        old_subs = saved_stats.get("subscriberCount", 0)
+        old_views = saved_stats.get("viewCount", 0)
+
+        channel = bot.get_channel(DISCORD_CHANNEL_ID)
+        if channel is None and DISCORD_CHANNEL_ID:
+            try:
+                channel = await bot.fetch_channel(DISCORD_CHANNEL_ID)
+            except Exception as fetch_error:
+                print(f"Không fetch được channel Discord: {fetch_error}")
+
+        crossed_sub_milestones = get_crossed_subscriber_milestones(old_subs, current_subs)
+        crossed_view_milestones = get_crossed_view_milestones(old_views, current_views)
+
+        if (crossed_sub_milestones or crossed_view_milestones) and not channel:
+            print("Không tìm thấy channel Discord để gửi chúc mừng. Chưa lưu stats để tránh mất mốc.")
+            return {
                 "subscriberCount": current_subs,
                 "viewCount": current_views,
                 "videoCount": int(stats.get("videoCount", 0))
-            })
-            print(f"Cập nhật: {current_subs} subs | {current_views} views")
-            
+            }
+
+        for milestone in crossed_sub_milestones:
+            if channel:
+                await channel.send(
+                    f"🎉 **CHÚC MỪNG!** Kênh **{channel_name}** vừa đạt mốc **{milestone:,} Subs!**"
+                )
+
+        for milestone in crossed_view_milestones:
+            if channel:
+                await channel.send(
+                    f"🔥 **CHÁY QUÁ!** Kênh **{channel_name}** vừa cán mốc **{milestone:,} Views!**"
+                )
+
+        new_stats = {
+            "subscriberCount": current_subs,
+            "viewCount": current_views,
+            "videoCount": int(stats.get("videoCount", 0))
+        }
+        save_stats(new_stats)
+        print(f"Cập nhật: {current_subs} subs | {current_views} views")
+        return new_stats
+
     except Exception as e:
         print(f"Đã xảy ra lỗi khi gọi API: {e}")
+        return None
+
+# --- 4. LOGIC KIỂM TRA YOUTUBE ---
+@tasks.loop(minutes=15)
+async def check_channel_stats():
+    await sync_channel_stats()
 
 # --- 5. LỆNH KIỂM TRA THỦ CÔNG ---
 @bot.command(name="ytstats")
 async def check_stats_manual(ctx):
-    stats = load_stats()
+    stats = await sync_channel_stats() or load_stats()
     subs = stats.get('subscriberCount', 0)
     views = stats.get('viewCount', 0)
     
